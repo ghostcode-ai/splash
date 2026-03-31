@@ -6,7 +6,7 @@ Cinematic splash page for ghostcode.ai. A ghost made of a flowing text matrix fl
 
 Generated with Nano Banana + Kling 3.0:
 
-https://github.com/ghostcode-ai/ghostcode/raw/main/media/ghostcode.mp4
+[![Ghostcode inspiration video](media/ghostcode.png)](https://github.com/ghostcode-ai/ghostcode/raw/main/media/ghostcode.mp4)
 
 ## Quick start
 
