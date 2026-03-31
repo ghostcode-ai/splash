@@ -1,6 +1,6 @@
 # ghostcode.ai splash page
 
-Cinematic splash page for ghostcode.ai. A ghost made of a flowing text matrix floats above a digital puddle, the camera orbits and dives overhead, and the scene resolves into an interactive title card.
+Cinematic splash page for [www.ghostcode.ai](https://ghostcode.ai). A ghost made of a flowing text matrix floats above a digital puddle, the camera orbits and dives overhead, and the scene resolves into an interactive title card.
 
 ### Inspiration
 
