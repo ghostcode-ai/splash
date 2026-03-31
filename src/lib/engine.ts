@@ -309,8 +309,8 @@ export class SplashEngine {
       this.lastFrame = now;
       this.time += dt;
 
-      // Continuous progress: 0→1 over ~22 seconds
-      this.progress = clamp(this.time / 22, 0, 1);
+      // Progress: 0→1 is the main animation (22s), continues past 1.0 for outro
+      this.progress = this.time / 22;
 
       this.updateCamera();
       this.updateGhost(dt);
@@ -413,18 +413,23 @@ export class SplashEngine {
 
   private render() {
     const ctx = this.ctx;
+    const p = this.progress;
+
     ctx.fillStyle = rgba(VOID, 1);
     ctx.fillRect(0, 0, this.w, this.h);
 
     this.renderGround(ctx);
 
     // Ghost fades out, reflection lingers then dissolves after
-    const ghostVisible = 1.0 - smoothstep(0.82, 0.92, this.progress);
-    const reflectionVisible = 1.0 - smoothstep(0.90, 1.0, this.progress);
+    const ghostVisible = 1.0 - smoothstep(0.82, 0.92, p);
+    const reflectionVisible = 1.0 - smoothstep(0.90, 1.0, p);
+
+    // Puddle chars stay at full brightness — they show through the GHOSTCODE mask
+    const puddleCharFade = 1.0;
 
     // Puddle (fades in early, grows to fill screen)
-    const puddleOp = smoothstep(0.03, 0.15, this.progress);
-    if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, reflectionVisible);
+    const puddleOp = smoothstep(0.03, 0.15, p);
+    if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, reflectionVisible, puddleCharFade);
 
     if (ghostVisible > 0.01) {
       this.renderGhostGlow(ctx);
@@ -432,6 +437,12 @@ export class SplashEngine {
     }
 
     this.renderVignette(ctx);
+
+    // GHOSTCODE mask fades in after puddle chars dissolve
+    const titleVisible = smoothstep(1.25, 1.4, p);
+    if (titleVisible > 0.01) {
+      this.renderTitleMask(ctx, titleVisible);
+    }
 
     this.frameCount++;
   }
@@ -539,7 +550,7 @@ export class SplashEngine {
   // PUDDLE — grid of characters, ghost reflection
   // ═══════════════════════════════════════════════════════════════════
 
-  private renderPuddle(ctx: CanvasRenderingContext2D, opacity: number, reflectionVis: number = 1) {
+  private renderPuddle(ctx: CanvasRenderingContext2D, opacity: number, reflectionVis: number = 1, charFade: number = 1) {
     const t = this.time;
     const [pcx, pcy] = this.toScreen(this.w / 2, this.puddleWorldY);
     // Puddle grows dramatically — starts medium, fills screen at end
@@ -585,7 +596,7 @@ export class SplashEngine {
         const ripple = Math.sin(Math.sqrt(d2) * pw * 0.05 - t * 2.5) * 0.25 + 0.75;
         const ci = Math.abs(Math.floor(gx * 0.08 + gy * 0.08 + scroll));
         const bright = (0.35 + ripple * 0.3) * (1 - d2 * 0.5);
-        this.stampChar(ctx, ci, gx, gy, CYAN, bright * 0.85);
+        this.stampChar(ctx, ci, gx, gy, CYAN, bright * 0.85 * charFade);
       }
     }
 
@@ -657,6 +668,56 @@ export class SplashEngine {
     grad.addColorStop(1, rgba(VOID, 0.75));
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // TITLE MASK — "GHOSTCODE" masks the puddle chars underneath
+  // The puddle grid keeps moving; only visible through letter shapes
+  // ═══════════════════════════════════════════════════════════════════
+
+  private titleCanvas: HTMLCanvasElement | null = null;
+  private titleCtx: CanvasRenderingContext2D | null = null;
+
+  private renderTitleMask(ctx: CanvasRenderingContext2D, visibility: number) {
+    const { w, h } = this;
+
+    // Lazy-create offscreen canvas for the dark overlay
+    if (!this.titleCanvas || this.titleCanvas.width !== w) {
+      this.titleCanvas = document.createElement('canvas');
+      this.titleCanvas.width = w;
+      this.titleCanvas.height = h;
+      this.titleCtx = this.titleCanvas.getContext('2d')!;
+    }
+    const oc = this.titleCtx!;
+
+    // Measure text to fit 80% screen width
+    oc.font = '800 100px "Syne", sans-serif';
+    const measured = oc.measureText('GHOSTCODE');
+    const fontSize = Math.round(100 * (w * 0.8 / measured.width));
+
+    // Build the overlay on offscreen: solid dark with letter-shaped holes
+    oc.clearRect(0, 0, w, h);
+    oc.fillStyle = rgba(VOID, 0.92);
+    oc.fillRect(0, 0, w, h);
+
+    // Punch out letter shapes — reveals whatever is already on the main canvas
+    oc.globalCompositeOperation = 'destination-out';
+    oc.font = `800 ${fontSize}px "Syne", sans-serif`;
+    oc.textAlign = 'center';
+    oc.textBaseline = 'middle';
+    oc.fillStyle = 'white';
+    oc.fillText('GHOSTCODE', w / 2, h / 2);
+    oc.globalCompositeOperation = 'source-over';
+    oc.textAlign = 'start';
+    oc.textBaseline = 'alphabetic';
+
+    // Composite: dark overlay with holes onto the main canvas
+    // The puddle chars already drawn underneath show through the holes
+    ctx.save();
+    ctx.globalAlpha = visibility;
+    ctx.drawImage(this.titleCanvas, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   getPhase() { return this.progress > 0.95 ? 'landing' : 'animating'; }
