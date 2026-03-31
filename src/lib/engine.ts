@@ -195,11 +195,12 @@ export class SplashEngine {
   // Puddle world-space
   private puddleWorldY = 0;
 
-  // Camera
+  // Camera — virtual 3D position for parallax
   private camZoom = 1;
   private camFocusX = 0;
   private camFocusY = 0;
-  private camTilt = 0; // 0 = front view, 1 = fully overhead
+  private camTilt = 0;     // 0 = front view, 1 = fully overhead
+  private camOrbitX = 0;   // lateral offset for fly-around effect
 
   // Row seeds for consistent scrolling
   private rowSeeds: number[] = [];
@@ -332,17 +333,28 @@ export class SplashEngine {
   private updateCamera() {
     const p = this.progress;
 
-    // Tilt: 0 (front/3-quarter) → 1 (overhead) — matches the video orbit
-    this.camTilt = smoothstep(0.15, 0.9, p);
+    // ── DRONE FLIGHT PATH ──
+    // Single continuous curves — no seams or velocity discontinuities.
 
-    // Zoom: increases as camera approaches, then goes big for puddle fill
-    this.camZoom = 1.0 + smoothstep(0, 0.85, p) * 1.8;
+    // Lateral orbit: sweep right → center → slight left
+    const orbitT = smoothstep(0.0, 0.65, p);
+    this.camOrbitX = lerp(this.w * 0.18, -this.w * 0.03, orbitT);
 
-    // Focus: shifts from ghost → puddle as we go overhead
+    // Tilt: front-on during orbit, rises for overhead dive
+    this.camTilt = smoothstep(0.35, 0.92, p);
+
+    // Zoom: single continuous ease-in curve (slow start, accelerating)
+    // Overshoots slightly past 1.0 so the final state is still moving when it ends
+    const zoomT = smoothstep(0, 1.05, p); // extends past p=1.0
+    const zoomEased = zoomT * zoomT * (0.6 + zoomT * 1.4);
+    this.camZoom = 1.0 + zoomEased;
+
+    // Vertical focus: overshoots past puddle so camera is still drifting down at the end
     const ghostY = this.ghostWorldY;
     const puddleY = this.puddleWorldY;
-    const focusT = smoothstep(0.1, 0.8, p);
-    this.camFocusY = lerp(ghostY + (puddleY - ghostY) * 0.25, puddleY, focusT);
+    const beyondPuddle = puddleY + (puddleY - ghostY) * 0.15; // target slightly past puddle
+    const focusT = smoothstep(0.08, 1.05, p); // extends past p=1.0
+    this.camFocusY = lerp(ghostY, beyondPuddle, focusT);
     this.camFocusX = this.w / 2;
   }
 
@@ -380,11 +392,17 @@ export class SplashEngine {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // WORLD → SCREEN projection
+  // WORLD → SCREEN projection with parallax
+  // depth: 0 = ground plane (puddle), 1 = floating (ghost)
+  // Higher depth = more lateral shift from camera orbit (closer = more parallax)
   // ═══════════════════════════════════════════════════════════════════
 
-  private toScreen(wx: number, wy: number): [number, number] {
-    const sx = (wx - this.camFocusX) * this.camZoom + this.w / 2;
+  private toScreen(wx: number, wy: number, depth: number = 0): [number, number] {
+    // Parallax: objects closer to camera (higher depth) shift more with orbit
+    const parallaxFactor = 1.0 + depth * 0.6;
+    const orbitShift = this.camOrbitX * parallaxFactor;
+
+    const sx = (wx - this.camFocusX + orbitShift) * this.camZoom + this.w / 2;
     const sy = (wy - this.camFocusY) * this.camZoom + this.h / 2;
     return [sx, sy];
   }
@@ -425,8 +443,8 @@ export class SplashEngine {
   private renderGhost(ctx: CanvasRenderingContext2D, visibility: number = 1) {
     const { ghostWorldX: gwx, ghostWorldY: gwy, ghostWorldScale: gws, time: t, ghostVelX } = this;
 
-    // Ghost screen position and scale
-    const [gsx, gsy] = this.toScreen(gwx, gwy);
+    // Ghost screen position — depth=1 (floating, more parallax shift)
+    const [gsx, gsy] = this.toScreen(gwx, gwy, 1);
     // Vertical compression: ghost squashes as camera goes overhead
     const perspCompressY = 1.0 - this.camTilt * 0.55;
     const gsScale = gws * this.camZoom;
@@ -497,7 +515,7 @@ export class SplashEngine {
   // ═══════════════════════════════════════════════════════════════════
 
   private renderGhostGlow(ctx: CanvasRenderingContext2D) {
-    const [gsx, gsy] = this.toScreen(this.ghostWorldX, this.ghostWorldY);
+    const [gsx, gsy] = this.toScreen(this.ghostWorldX, this.ghostWorldY, 1);
     const r = this.ghostWorldScale * this.camZoom * 0.7;
 
     const g1 = ctx.createRadialGradient(gsx, gsy, r * 0.05, gsx, gsy, r);
@@ -585,10 +603,11 @@ export class SplashEngine {
     visibility: number = 1,
   ) {
     const { ghostWorldX: gwx, ghostWorldY: gwy, ghostWorldScale: gws, time: t, ghostVelX } = this;
-    const [gsx] = this.toScreen(gwx, gwy);
+    // Reflection uses ghost's screen X (with parallax) but puddle's depth
+    const [gsx, gsyGhost] = this.toScreen(gwx, gwy, 0.5); // mid-depth for reflection
 
     // Reflection: larger, brighter, more visible
-    const refCY = pcy + (pcy - this.toScreen(gwx, gwy)[1]) * 0.2;
+    const refCY = pcy + (pcy - gsyGhost) * 0.2;
     const refScale = gws * this.camZoom * 0.42;
 
     const step = 14;
