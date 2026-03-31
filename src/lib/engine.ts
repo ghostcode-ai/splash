@@ -105,21 +105,31 @@ function ghostSDF(
   // ── SMOOTH UNION: dome flows into body ──
   let shape = smin(head, body, 0.12);
 
-  // ── WAVY HEM: continuous undulating bottom edge (like a sheet) ──
-  const waveAmp = 0.035 + Math.sin(time * 0.6) * 0.008;
-  const wave = Math.sin(qx * 9 + time * 1.8) * waveAmp
-             + Math.sin(qx * 16 - time * 1.3) * waveAmp * 0.5
-             + Math.sin(qx * 5 + time * 0.7) * waveAmp * 0.7;
-  // Bottom with wind-shifted drape
-  const bottomEdge = bodyBot + wave + windShift * 0.3 * Math.sin(qx * 4 + time);
+  // ── WAVY HEM: flowing fabric bottom — multiple layered waves ──
+  const waveAmp = 0.04 + Math.sin(time * 0.5) * 0.012;
+  const wave = Math.sin(qx * 8 + time * 2.0) * waveAmp
+             + Math.sin(qx * 14 - time * 1.5) * waveAmp * 0.5
+             + Math.sin(qx * 4 + time * 0.6) * waveAmp * 0.8
+             + Math.sin(qx * 20 + time * 2.8) * waveAmp * 0.2; // fine flutter
+  const bottomEdge = bodyBot + wave + windShift * 0.4 * Math.sin(qx * 4 + time);
   shape = Math.max(shape, qy - bottomEdge);
 
   // ── CUT ABOVE HEAD ──
   shape = Math.max(shape, -(qy + 0.30));
 
-  // ── ORGANIC EDGE NOISE ──
-  shape += Math.sin(qx * 18 + qy * 10 + time * 1.2) * 0.005
-         + Math.sin(qy * 25 - time * 1.8) * 0.003;
+  // ── LIVING EDGE: body sides ripple like fabric breathing ──
+  // Stronger deformation lower in the body (top stays stable, bottom flows)
+  const bodyDepth = clamp((qy - bodyTop) / (bodyBot - bodyTop), 0, 1);
+  const edgeRipple = bodyDepth * bodyDepth * (
+    Math.sin(qy * 12 + time * 2.2) * 0.012
+    + Math.sin(qy * 20 - time * 1.6) * 0.006
+    + Math.sin(qy * 8 + qx * 5 + time * 1.0) * 0.008
+  );
+  shape += edgeRipple;
+
+  // Fine organic noise on all edges
+  shape += Math.sin(qx * 22 + qy * 12 + time * 1.3) * 0.004
+         + Math.sin(qy * 30 - time * 2.0) * 0.002;
 
   // ── EYES: two ovals in the head dome ──
   const eyeSp = 0.085;
@@ -349,14 +359,24 @@ export class SplashEngine {
     const approachT = smoothstep(0.1, 0.6, p);
     this.ghostBaseY = lerp(this.h * 0.30, this.h * 0.50, approachT);
 
-    // Organic float (reduces amplitude as we zoom in)
-    const floatScale = 1.0 - p * 0.6;
-    const driftX = (Math.sin(t * 0.25) * 20 + Math.sin(t * 0.6) * 8) * floatScale;
-    const bobY = (Math.sin(t * 0.4) * 12 + Math.sin(t * 0.9) * 4) * floatScale;
+    // --- LIFELIKE MOTION ---
+    // Layered organic movement: slow drift + medium bob + fast micro-jitter
+    const floatScale = 1.0 - p * 0.5;
 
-    this.ghostWorldX = this.ghostBaseX + driftX;
-    this.ghostWorldY = this.ghostBaseY + bobY;
+    // Slow drift (like floating in still air)
+    const driftX = Math.sin(t * 0.2) * 25 + Math.sin(t * 0.53) * 12;
+    // Breathing bob — slightly irregular, like a living thing
+    const breathe = Math.sin(t * 0.45) * 14 + Math.sin(t * 0.83) * 6 + Math.sin(t * 1.7) * 2;
+    // Subtle lateral sway (weight shifting)
+    const sway = Math.sin(t * 0.35) * 8 * Math.sin(t * 0.12);
+
+    this.ghostWorldX = this.ghostBaseX + (driftX + sway) * floatScale;
+    this.ghostWorldY = this.ghostBaseY + breathe * floatScale;
     this.ghostVelX = (this.ghostWorldX - this.ghostPrevX) / Math.max(dt, 0.001);
+
+    // Breathing scale: ghost subtly expands/contracts like it's alive
+    const breatheScale = 1.0 + Math.sin(t * 0.5) * 0.015 + Math.sin(t * 1.3) * 0.005;
+    this.ghostWorldScale = Math.min(this.w, this.h) * 0.35 * breatheScale;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -380,12 +400,14 @@ export class SplashEngine {
 
     this.renderGround(ctx);
 
+    // Ghost fades out, reflection lingers then dissolves after
+    const ghostVisible = 1.0 - smoothstep(0.82, 0.92, this.progress);
+    const reflectionVisible = 1.0 - smoothstep(0.90, 1.0, this.progress);
+
     // Puddle (fades in early, grows to fill screen)
     const puddleOp = smoothstep(0.03, 0.15, this.progress);
-    if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp);
+    if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, reflectionVisible);
 
-    // Ghost (with perspective compression as camera tilts overhead)
-    const ghostVisible = 1.0 - smoothstep(0.88, 1.0, this.progress); // fades at end
     if (ghostVisible > 0.01) {
       this.renderGhostGlow(ctx);
       this.renderGhost(ctx, ghostVisible);
@@ -503,7 +525,7 @@ export class SplashEngine {
   // PUDDLE — grid of characters, ghost reflection
   // ═══════════════════════════════════════════════════════════════════
 
-  private renderPuddle(ctx: CanvasRenderingContext2D, opacity: number) {
+  private renderPuddle(ctx: CanvasRenderingContext2D, opacity: number, reflectionVis: number = 1) {
     const t = this.time;
     const [pcx, pcy] = this.toScreen(this.w / 2, this.puddleWorldY);
     // Puddle grows dramatically — starts medium, fills screen at end
@@ -553,8 +575,10 @@ export class SplashEngine {
       }
     }
 
-    // Ghost reflection
-    this.renderReflection(ctx, pcx, pcy, pw, ph);
+    // Ghost reflection — dissolves after ghost fades
+    if (reflectionVis > 0.01) {
+      this.renderReflection(ctx, pcx, pcy, pw, ph, reflectionVis);
+    }
 
     ctx.restore();
   }
@@ -562,6 +586,7 @@ export class SplashEngine {
   private renderReflection(
     ctx: CanvasRenderingContext2D,
     pcx: number, pcy: number, pw: number, ph: number,
+    visibility: number = 1,
   ) {
     const { ghostWorldX: gwx, ghostWorldY: gwy, ghostWorldScale: gws, time: t, ghostVelX } = this;
     const [gsx] = this.toScreen(gwx, gwy);
@@ -589,7 +614,7 @@ export class SplashEngine {
         const dx = Math.sin(ry * 0.05 + t * 1.8) * 4;
         const dy = Math.sin(rx * 0.04 + t * 1.3) * 3;
         const ci = Math.abs(Math.floor(rx * 0.07 + scroll));
-        const alpha = sdf.rim * 0.5;
+        const alpha = sdf.rim * 0.5 * visibility;
         this.stampChar(ctx, ci, rx + dx, ry + dy, MOONLIT, alpha);
       }
     }
