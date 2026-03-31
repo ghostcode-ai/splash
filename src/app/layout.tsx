@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Space_Mono, Syne } from 'next/font/google';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 const spaceMono = Space_Mono({
@@ -34,7 +35,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${spaceMono.variable} ${syne.variable}`}>
-      <body>{children}</body>
+      <body>{children}<Analytics /></body>
     </html>
   );
 }
