@@ -22,10 +22,12 @@ export function SplashExperience() {
       engine.start();
       // Hide loading screen directly (React re-render may lag behind heavy animation)
       const loader = document.querySelector('.loading-screen');
-      if (loader) (loader as HTMLElement).style.opacity = '0';
-      setTimeout(() => {
-        if (loader) (loader as HTMLElement).style.display = 'none';
-      }, 1000);
+      if (loader) {
+        const el = loader as HTMLElement;
+        el.style.opacity = '0';
+        el.style.pointerEvents = 'none';
+        setTimeout(() => { el.style.display = 'none'; }, 1000);
+      }
       setLoaded(true);
     });
 

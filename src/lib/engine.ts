@@ -606,8 +606,8 @@ export class SplashEngine {
       if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, 0, 1.0);
       this.renderVignette(ctx);
 
-      // Mask fades back in after 3s wait
-      this.maskOpacity = smoothstep(3.0, 4.5, this.loopTime);
+      // Mask fades back in after 2s wait
+      this.maskOpacity = smoothstep(2.0, 3.5, this.loopTime);
       if (this.maskOpacity > 0.01) {
         this.renderTitleMask(ctx, this.maskOpacity);
       }
@@ -632,7 +632,7 @@ export class SplashEngine {
       }
     } else if (this.loopState === 'waiting') {
       // Mask fully back? Return to masked state
-      if (this.loopTime > 5.0) {
+      if (this.loopTime > 4.0) {
         this.loopState = 'masked';
         this.maskOpacity = 1;
         this.loopTime = 0;
@@ -1013,7 +1013,7 @@ export class SplashEngine {
     const oc = this.titleCtx!;
 
     // Measure text to fit 80% screen width
-    oc.font = '800 100px "Syne", sans-serif';
+    oc.font = '900 100px Impact, "Arial Narrow", Haettenschweiler, sans-serif';
     const measured = oc.measureText('GHOSTCODE');
     const fontSize = Math.round(100 * (w * 0.8 / measured.width));
     this.titleFontSize = fontSize; // cache for hit testing
@@ -1025,7 +1025,7 @@ export class SplashEngine {
 
     // Punch out letter shapes — reveals whatever is already on the main canvas
     oc.globalCompositeOperation = 'destination-out';
-    oc.font = `800 ${fontSize}px "Syne", sans-serif`;
+    oc.font = `900 ${fontSize}px Impact, "Arial Narrow", Haettenschweiler, sans-serif`;
     oc.textAlign = 'center';
     oc.textBaseline = 'middle';
     oc.fillStyle = 'white';
