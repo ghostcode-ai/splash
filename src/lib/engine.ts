@@ -211,6 +211,20 @@ export class SplashEngine {
   private glyphH = 0;
   private atlasChars: string[] = [];
 
+  // ── LOOP STATE: ghost flythrough after clicking GHOSTCODE ──
+  private loopState: 'intro' | 'masked' | 'flythrough' | 'waiting' = 'intro';
+  private loopTime = 0;             // time within current loop state
+  private maskOpacity = 0;          // current mask visibility (animated)
+  // Flythrough path
+  private flyStartX = 0;
+  private flyStartY = 0;
+  private flyEndX = 0;
+  private flyEndY = 0;
+  private flyCtrlX = 0;            // bezier control point
+  private flyCtrlY = 0;
+  private flyDuration = 5;
+  private titleFontSize = 0;       // cached for hit testing
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -241,6 +255,10 @@ export class SplashEngine {
 
     this.camFocusX = this.w / 2;
     this.camFocusY = this.h * 0.45;
+
+    // Click + cursor handling
+    this.canvas.addEventListener('click', this.handleClick);
+    this.canvas.addEventListener('mousemove', this.handleMouseMove);
 
     // Pre-generate row seeds
     this.rand = mulberry32(42);
@@ -275,6 +293,113 @@ export class SplashEngine {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // INTERACTION: click GHOSTCODE to trigger ghost flythrough
+  // ═══════════════════════════════════════════════════════════════════
+
+  private isOverTitle(mx: number, my: number): boolean {
+    if (this.loopState !== 'masked' || this.maskOpacity < 0.5) return false;
+    // Hit test against the GHOSTCODE text bounds
+    const cx = this.w / 2;
+    const cy = this.h / 2;
+    const halfW = this.w * 0.42;
+    const halfH = this.titleFontSize * 0.55;
+    return mx > cx - halfW && mx < cx + halfW && my > cy - halfH && my < cy + halfH;
+  }
+
+  private handleMouseMove = (e: MouseEvent) => {
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    this.canvas.style.cursor = this.isOverTitle(mx, my) ? 'pointer' : 'default';
+  };
+
+  private handleClick = (e: MouseEvent) => {
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    if (this.isOverTitle(mx, my)) {
+      this.startFlythrough();
+    }
+  };
+
+  private startFlythrough() {
+    this.loopState = 'flythrough';
+    this.loopTime = 0;
+
+    const { w, h } = this;
+    const gs = Math.min(w, h) * 0.35;
+    const margin = gs * 1.5;
+    const r = Math.random;
+
+    // Pick random entry point on a random edge
+    const edges = ['top', 'right', 'bottom', 'left'] as const;
+    const entryEdge = edges[Math.floor(r() * 4)];
+
+    const edgePoint = (edge: string): [number, number] => {
+      const off = 0.2 + r() * 0.6;
+      switch (edge) {
+        case 'top':    return [w * off, -margin];
+        case 'bottom': return [w * off, h + margin];
+        case 'left':   return [-margin, h * off];
+        case 'right':  return [w + margin, h * off];
+        default:       return [w * 0.5, -margin];
+      }
+    };
+
+    [this.flyStartX, this.flyStartY] = edgePoint(entryEdge);
+
+    // EXIT: find the screen vertex (corner) farthest from start
+    const corners: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
+    let farCorner = corners[0];
+    let farDist = 0;
+    for (const c of corners) {
+      const d = Math.sqrt((c[0] - this.flyStartX) ** 2 + (c[1] - this.flyStartY) ** 2);
+      if (d > farDist) { farDist = d; farCorner = c; }
+    }
+
+    // Pick a random point on one of the two edges meeting at that corner,
+    // no more than halfway along that edge
+    const [cx, cy] = farCorner;
+    // The two edges from this corner
+    const edgesFromCorner: [number, number][][] = [];
+    if (cy === 0) { // top edge
+      edgesFromCorner.push([[cx, 0], [cx === 0 ? w * 0.5 : cx - w * 0.5, 0]]);
+    } else { // bottom edge
+      edgesFromCorner.push([[cx, h], [cx === 0 ? w * 0.5 : cx - w * 0.5, h]]);
+    }
+    if (cx === 0) { // left edge
+      edgesFromCorner.push([[0, cy], [0, cy === 0 ? h * 0.5 : cy - h * 0.5]]);
+    } else { // right edge
+      edgesFromCorner.push([[w, cy], [w, cy === 0 ? h * 0.5 : cy - h * 0.5]]);
+    }
+
+    // Pick one of the two edges randomly, then a random point up to 50% along it
+    const chosenEdge = edgesFromCorner[Math.floor(r() * edgesFromCorner.length)];
+    const along = r() * 0.5; // 0–50% from the corner
+    this.flyEndX = lerp(chosenEdge[0][0], chosenEdge[1][0], along) + (Math.abs(chosenEdge[0][0] - w / 2) > w / 4 ? Math.sign(chosenEdge[0][0] - w / 2) * margin : 0);
+    this.flyEndY = lerp(chosenEdge[0][1], chosenEdge[1][1], along) + (Math.abs(chosenEdge[0][1] - h / 2) > h / 4 ? Math.sign(chosenEdge[0][1] - h / 2) * margin : 0);
+
+    // Push exit point off-screen along the edge direction
+    const exitDx = this.flyEndX - w / 2;
+    const exitDy = this.flyEndY - h / 2;
+    const exitLen = Math.sqrt(exitDx * exitDx + exitDy * exitDy) || 1;
+    this.flyEndX += (exitDx / exitLen) * margin;
+    this.flyEndY += (exitDy / exitLen) * margin;
+
+    // Control point: perpendicular offset from midpoint for a curved arc
+    const midX = (this.flyStartX + this.flyEndX) / 2;
+    const midY = (this.flyStartY + this.flyEndY) / 2;
+    const pathDx = this.flyEndX - this.flyStartX;
+    const pathDy = this.flyEndY - this.flyStartY;
+    const perpDir = r() > 0.5 ? 1 : -1;
+    this.flyCtrlX = clamp(midX + (-pathDy * 0.35 * perpDir), w * 0.1, w * 0.9);
+    this.flyCtrlY = clamp(midY + (pathDx * 0.35 * perpDir), h * 0.1, h * 0.9);
+
+    this.flyDuration = 12 + r() * 5; // 20% slower (12–17s)
+  }
+
   /** Fast character stamp using the atlas. Color is baked via globalAlpha + filter. */
   private stampChar(ctx: CanvasRenderingContext2D, charIdx: number, x: number, y: number, color: RGB, alpha: number) {
     if (alpha < 0.01) return;
@@ -300,7 +425,11 @@ export class SplashEngine {
   }
 
   stop() { if (this.animId) cancelAnimationFrame(this.animId); }
-  destroy() { this.stop(); }
+  destroy() {
+    this.stop();
+    this.canvas.removeEventListener('click', this.handleClick);
+    this.canvas.removeEventListener('mousemove', this.handleMouseMove);
+  }
 
   private loop = () => {
     try {
@@ -311,6 +440,9 @@ export class SplashEngine {
 
       // Progress: 0→1 is the main animation (22s), continues past 1.0 for outro
       this.progress = this.time / 22;
+
+      // Track time within current loop state
+      this.loopTime += dt;
 
       this.updateCamera();
       this.updateGhost(dt);
@@ -414,37 +546,227 @@ export class SplashEngine {
   private render() {
     const ctx = this.ctx;
     const p = this.progress;
+    const t = this.time;
 
     ctx.fillStyle = rgba(VOID, 1);
     ctx.fillRect(0, 0, this.w, this.h);
 
     this.renderGround(ctx);
 
-    // Ghost fades out, reflection lingers then dissolves after
-    const ghostVisible = 1.0 - smoothstep(0.82, 0.92, p);
-    const reflectionVisible = 1.0 - smoothstep(0.90, 1.0, p);
+    // ── LOOP STATE MACHINE ──
+    this.updateLoopState();
 
-    // Puddle chars stay at full brightness — they show through the GHOSTCODE mask
-    const puddleCharFade = 1.0;
+    // Puddle is always visible once it fades in
+    const puddleOp = clamp(smoothstep(0.03, 0.15, p), 0, 1);
 
-    // Puddle (fades in early, grows to fill screen)
-    const puddleOp = smoothstep(0.03, 0.15, p);
-    if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, reflectionVisible, puddleCharFade);
+    if (this.loopState === 'intro') {
+      // Original intro animation
+      const ghostVisible = 1.0 - smoothstep(0.82, 0.92, p);
+      const reflectionVisible = 1.0 - smoothstep(0.90, 1.0, p);
 
-    if (ghostVisible > 0.01) {
-      this.renderGhostGlow(ctx);
-      this.renderGhost(ctx, ghostVisible);
-    }
+      if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, reflectionVisible, 1.0);
 
-    this.renderVignette(ctx);
+      if (ghostVisible > 0.01) {
+        this.renderGhostGlow(ctx);
+        this.renderGhost(ctx, ghostVisible);
+      }
 
-    // GHOSTCODE mask fades in after puddle chars dissolve
-    const titleVisible = smoothstep(1.25, 1.4, p);
-    if (titleVisible > 0.01) {
-      this.renderTitleMask(ctx, titleVisible);
+      this.renderVignette(ctx);
+
+      // Title mask fades in at end of intro
+      const titleVis = smoothstep(1.25, 1.4, p);
+      if (titleVis > 0.01) {
+        this.maskOpacity = titleVis;
+        this.renderTitleMask(ctx, this.maskOpacity);
+      }
+    } else if (this.loopState === 'masked') {
+      // Steady state: puddle + mask
+      if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, 0, 1.0);
+      this.renderVignette(ctx);
+      this.renderTitleMask(ctx, this.maskOpacity);
+
+    } else if (this.loopState === 'flythrough') {
+      // Mask fading out + ghost flying through
+      if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, 0, 1.0);
+
+      // Ghost on its flythrough path
+      const ft = clamp(this.loopTime / this.flyDuration, 0, 1);
+      this.renderFlythroughGhost(ctx, ft);
+
+      this.renderVignette(ctx);
+
+      // Mask fades out over first 1.5s of flythrough
+      this.maskOpacity = clamp(1.0 - this.loopTime / 1.5, 0, 1);
+      if (this.maskOpacity > 0.01) {
+        this.renderTitleMask(ctx, this.maskOpacity);
+      }
+
+    } else if (this.loopState === 'waiting') {
+      // Ghost gone, waiting 3s, then mask fades back in
+      if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, 0, 1.0);
+      this.renderVignette(ctx);
+
+      // Mask fades back in after 3s wait
+      this.maskOpacity = smoothstep(3.0, 4.5, this.loopTime);
+      if (this.maskOpacity > 0.01) {
+        this.renderTitleMask(ctx, this.maskOpacity);
+      }
     }
 
     this.frameCount++;
+  }
+
+  private updateLoopState() {
+    if (this.loopState === 'intro') {
+      // Transition to 'masked' once title is fully visible
+      if (this.progress > 1.5) {
+        this.loopState = 'masked';
+        this.maskOpacity = 1;
+        this.loopTime = 0;
+      }
+    } else if (this.loopState === 'flythrough') {
+      // Ghost finished its path?
+      if (this.loopTime > this.flyDuration) {
+        this.loopState = 'waiting';
+        this.loopTime = 0;
+      }
+    } else if (this.loopState === 'waiting') {
+      // Mask fully back? Return to masked state
+      if (this.loopTime > 5.0) {
+        this.loopState = 'masked';
+        this.maskOpacity = 1;
+        this.loopTime = 0;
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FLYTHROUGH GHOST — bezier curve path across the screen
+  // ═══════════════════════════════════════════════════════════════════
+
+  private renderFlythroughGhost(ctx: CanvasRenderingContext2D, ft: number) {
+    const t = this.time;
+
+    // Variable speed: ft progresses unevenly (wanders faster/slower)
+    const speedWobble = 1.0 + Math.sin(t * 0.7) * 0.12 + Math.sin(t * 1.3) * 0.06;
+    // We don't actually remap ft (that would mess up duration), instead we
+    // displace the position off the path to simulate wandering
+
+    // Quadratic bezier: start → control → end
+    const t1 = 1 - ft;
+    let bx = t1 * t1 * this.flyStartX + 2 * t1 * ft * this.flyCtrlX + ft * ft * this.flyEndX;
+    let by = t1 * t1 * this.flyStartY + 2 * t1 * ft * this.flyCtrlY + ft * ft * this.flyEndY;
+
+    // Wandering: layered sine displacement perpendicular to path
+    // Gives the ghost an organic, drifting, curious quality
+    const wanderX = Math.sin(t * 0.3) * 30 + Math.sin(t * 0.7) * 15 + Math.sin(t * 1.4) * 6;
+    const wanderY = Math.sin(t * 0.25) * 25 + Math.sin(t * 0.6) * 12 + Math.sin(t * 1.1) * 5;
+    // Reduce wander near edges so ghost enters/exits cleanly
+    const edgeDamp = Math.min(smoothstep(0, 0.15, ft), smoothstep(1, 0.85, ft));
+    bx += wanderX * edgeDamp;
+    by += wanderY * edgeDamp;
+
+    // Save all state we'll override
+    const saved = {
+      gx: this.ghostWorldX,
+      gy: this.ghostWorldY,
+      gs: this.ghostWorldScale,
+      vx: this.ghostVelX,
+      zoom: this.camZoom,
+      fx: this.camFocusX,
+      fy: this.camFocusY,
+      orbit: this.camOrbitX,
+      tilt: this.camTilt,
+    };
+
+    // Set ghost position on bezier path
+    this.ghostWorldX = bx;
+    this.ghostWorldY = by;
+
+    // Same scale as the intro ghost (before any zoom)
+    this.ghostWorldScale = Math.min(this.w, this.h) * 0.35;
+
+    // Velocity from path direction for dress trailing
+    const dt = 0.01;
+    const ft2 = Math.min(ft + dt, 1);
+    const t2 = 1 - ft2;
+    const nextBx = t2 * t2 * this.flyStartX + 2 * t2 * ft2 * this.flyCtrlX + ft2 * ft2 * this.flyEndX;
+    this.ghostVelX = (nextBx - bx) / (this.flyDuration * dt);
+
+    // Camera: simple centered view, no zoom/orbit/tilt — same as intro start
+    this.camZoom = 1;
+    this.camFocusX = this.w / 2;
+    this.camFocusY = this.h / 2;
+    this.camOrbitX = 0;
+    this.camTilt = 0;
+
+    // Smooth edge fade
+    const edgeFade = Math.min(
+      smoothstep(0, 0.12, ft),
+      smoothstep(1.0, 0.88, ft),
+    );
+
+    // Shadow/reflection on the ground below the ghost
+    this.renderFlythroughShadow(ctx, bx, by, edgeFade);
+
+    this.renderGhostGlow(ctx);
+    this.renderGhost(ctx, edgeFade);
+
+    // Restore everything
+    this.ghostWorldX = saved.gx;
+    this.ghostWorldY = saved.gy;
+    this.ghostWorldScale = saved.gs;
+    this.ghostVelX = saved.vx;
+    this.camZoom = saved.zoom;
+    this.camFocusX = saved.fx;
+    this.camFocusY = saved.fy;
+    this.camOrbitX = saved.orbit;
+    this.camTilt = saved.tilt;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FLYTHROUGH SHADOW — reflection/shadow on ground below the ghost
+  // ═══════════════════════════════════════════════════════════════════
+
+  private renderFlythroughShadow(ctx: CanvasRenderingContext2D, gx: number, gy: number, opacity: number) {
+    const gs = this.ghostWorldScale;
+    const t = this.time;
+
+    // Shadow sits on the "ground" below the ghost — vertically offset and squashed
+    const shadowY = gy + gs * 0.7;  // below the ghost
+    const shadowW = gs * 0.5;
+    const shadowH = gs * 0.12;      // very squashed vertically (ground plane perspective)
+
+    // Soft elliptical glow
+    const grad = ctx.createRadialGradient(gx, shadowY, 0, gx, shadowY, shadowW);
+    grad.addColorStop(0, rgba(MOONLIT, 0.08 * opacity));
+    grad.addColorStop(0.4, rgba(DUSTY, 0.04 * opacity));
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.fillRect(gx - shadowW, shadowY - shadowH * 2, shadowW * 2, shadowH * 4);
+
+    // Distorted text reflection inside the shadow ellipse
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(gx, shadowY, shadowW * 0.8, shadowH, 0, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.font = '8px "Space Mono", monospace';
+    ctx.textBaseline = 'top';
+    const refText = 'GHOST CODE [void] 0xDEAD => spectral emergence ';
+    const lineH = 10;
+
+    for (let ry = shadowY - shadowH; ry < shadowY + shadowH; ry += lineH) {
+      const ri = Math.floor(ry / lineH);
+      const dx = Math.sin(ry * 0.08 + t * 1.5) * 5; // water distortion
+      const off = (ri * 7 + Math.floor(t * 5)) % refText.length;
+      const text = (refText.slice(off) + refText).slice(0, 60);
+      const alpha = 0.2 * opacity * (1 - Math.abs(ry - shadowY) / shadowH);
+      ctx.fillStyle = rgba(MOONLIT, alpha);
+      ctx.fillText(text, gx - shadowW * 0.7 + dx, ry);
+    }
+
+    ctx.restore();
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -694,6 +1016,7 @@ export class SplashEngine {
     oc.font = '800 100px "Syne", sans-serif';
     const measured = oc.measureText('GHOSTCODE');
     const fontSize = Math.round(100 * (w * 0.8 / measured.width));
+    this.titleFontSize = fontSize; // cache for hit testing
 
     // Build the overlay on offscreen: solid dark with letter-shaped holes
     oc.clearRect(0, 0, w, h);
