@@ -415,11 +415,7 @@ export class SplashEngine {
 
     this.renderVignette(ctx);
 
-    // DEBUG
     this.frameCount++;
-    ctx.fillStyle = 'lime';
-    ctx.font = '14px monospace';
-    ctx.fillText(`f=${this.frameCount} time=${this.time.toFixed(2)} p=${this.progress.toFixed(3)} z=${this.camZoom.toFixed(2)}`, 10, 20);
   }
 
   // ═══════════════════════════════════════════════════════════════════
