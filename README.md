@@ -6,13 +6,7 @@ Cinematic splash page for [www.ghostcode.ai](https://ghostcode.ai). A ghost made
 
 Generated with Nano Banana + Kling 3.0:
 
-<a href="https://github.com/ghostcode-ai/ghostcode/raw/main/media/ghostcode.mp4">
-  <img
-    src="media/ghostcode.png"
-    alt="Ghostcode inspiration video"
-    style="max-width: 420px; width: 100%; height: auto; display: block;"
-  />
-</a>
+<a href="https://github.com/ghostcode-ai/ghostcode/raw/main/media/ghostcode.mp4"><img src="media/ghostcode.png" alt="Ghostcode inspiration video" width="360"></a>
 
 ## Quick start
 
