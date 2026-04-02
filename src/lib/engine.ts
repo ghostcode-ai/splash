@@ -574,7 +574,7 @@ export class SplashEngine {
       this.renderVignette(ctx);
 
       // Title mask fades in at end of intro
-      const titleVis = smoothstep(1.25, 1.4, p);
+      const titleVis = smoothstep(1.16, 1.31, p);
       if (titleVis > 0.01) {
         this.maskOpacity = titleVis;
         this.renderTitleMask(ctx, this.maskOpacity);
@@ -606,8 +606,8 @@ export class SplashEngine {
       if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, 0, 1.0);
       this.renderVignette(ctx);
 
-      // Mask fades back in after 2s wait
-      this.maskOpacity = smoothstep(2.0, 3.5, this.loopTime);
+      // Mask fades back in immediately
+      this.maskOpacity = smoothstep(0.0, 1.5, this.loopTime);
       if (this.maskOpacity > 0.01) {
         this.renderTitleMask(ctx, this.maskOpacity);
       }
