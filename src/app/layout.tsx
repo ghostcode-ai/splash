@@ -18,6 +18,7 @@ const syne = Syne({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://ghostcode.ai'),
   title: 'ghostcode.ai — Step Into the Unknown',
   description:
     'We build in the spaces between what is known and what is possible.',
