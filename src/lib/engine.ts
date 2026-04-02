@@ -236,6 +236,31 @@ export class SplashEngine {
 
   init() {
     this.dpr = 1; // force 1x for performance until we optimize
+    this.resize();
+
+    // Click + cursor handling
+    this.canvas.addEventListener('click', this.handleClick);
+    this.canvas.addEventListener('mousemove', this.handleMouseMove);
+    window.addEventListener('resize', this.handleResize);
+
+    // Pre-generate row seeds
+    this.rand = mulberry32(42);
+    this.rowSeeds = [];
+    for (let i = 0; i < 500; i++) {
+      this.rowSeeds.push(this.rand() * 100000);
+    }
+
+    // Build bitmap character atlas — one white glyph per character
+    this.buildAtlas();
+  }
+
+  private handleResize = () => {
+    this.resize();
+    // Force title canvas to be rebuilt at new size
+    this.titleCanvas = null;
+  };
+
+  private resize() {
     this.w = window.innerWidth;
     this.h = window.innerHeight;
     this.canvas.width = this.w * this.dpr;
@@ -255,20 +280,6 @@ export class SplashEngine {
 
     this.camFocusX = this.w / 2;
     this.camFocusY = this.h * 0.45;
-
-    // Click + cursor handling
-    this.canvas.addEventListener('click', this.handleClick);
-    this.canvas.addEventListener('mousemove', this.handleMouseMove);
-
-    // Pre-generate row seeds
-    this.rand = mulberry32(42);
-    this.rowSeeds = [];
-    for (let i = 0; i < 500; i++) {
-      this.rowSeeds.push(this.rand() * 100000);
-    }
-
-    // Build bitmap character atlas — one white glyph per character
-    this.buildAtlas();
   }
 
   private buildAtlas() {
@@ -429,6 +440,7 @@ export class SplashEngine {
     this.stop();
     this.canvas.removeEventListener('click', this.handleClick);
     this.canvas.removeEventListener('mousemove', this.handleMouseMove);
+    window.removeEventListener('resize', this.handleResize);
   }
 
   private loop = () => {
