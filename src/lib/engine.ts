@@ -223,6 +223,13 @@ export class SplashEngine {
   private flyCtrlX = 0;            // bezier control point
   private flyCtrlY = 0;
   private flyDuration = 5;
+  private flyElapsed = 0;          // time since flythrough started (independent of path resets)
+  private ghostScreenX = 0;        // current ghost screen position (for hit test + velocity)
+  private ghostScreenY = 0;
+  private ghostPrevScreenX = 0;
+  private ghostPrevScreenY = 0;
+  private ghostHitRadius = 0;
+  private ghostWasVisible = false; // true once the ghost has entered the viewport this flythrough
   private titleFontSize = 0;       // cached for hit testing
 
   constructor(canvas: HTMLCanvasElement) {
@@ -271,7 +278,9 @@ export class SplashEngine {
 
     this.ghostWorldScale = Math.min(this.w, this.h) * 0.35;
     this.ghostBaseX = this.w * 0.5;
-    this.ghostBaseY = this.h * 0.32;
+    // Use end-of-intro Y once the intro is done (matches updateGhost's final
+    // approachT=1 value) so updateCamera's beyondPuddle stays consistent.
+    this.ghostBaseY = this.loopState === 'intro' ? this.h * 0.32 : this.h * 0.50;
     this.ghostWorldX = this.ghostBaseX;
     this.ghostWorldY = this.ghostBaseY;
     this.ghostPrevX = this.ghostWorldX;
@@ -318,11 +327,20 @@ export class SplashEngine {
     return mx > cx - halfW && mx < cx + halfW && my > cy - halfH && my < cy + halfH;
   }
 
+  private isOverGhost(mx: number, my: number): boolean {
+    if (this.loopState !== 'flythrough') return false;
+    if (this.ghostHitRadius <= 0) return false;
+    const dx = mx - this.ghostScreenX;
+    const dy = my - this.ghostScreenY;
+    return dx * dx + dy * dy < this.ghostHitRadius * this.ghostHitRadius;
+  }
+
   private handleMouseMove = (e: MouseEvent) => {
     const rect = this.canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    this.canvas.style.cursor = this.isOverTitle(mx, my) ? 'pointer' : 'default';
+    this.canvas.style.cursor =
+      (this.isOverTitle(mx, my) || this.isOverGhost(mx, my)) ? 'pointer' : 'default';
   };
 
   private handleClick = (e: MouseEvent) => {
@@ -330,6 +348,10 @@ export class SplashEngine {
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
+    if (this.isOverGhost(mx, my)) {
+      this.changeDirection();
+      return;
+    }
     if (this.isOverTitle(mx, my)) {
       this.startFlythrough();
     }
@@ -338,6 +360,8 @@ export class SplashEngine {
   private startFlythrough() {
     this.loopState = 'flythrough';
     this.loopTime = 0;
+    this.flyElapsed = 0;
+    this.ghostWasVisible = false;
 
     const { w, h } = this;
     const gs = Math.min(w, h) * 0.35;
@@ -409,6 +433,58 @@ export class SplashEngine {
     this.flyCtrlY = clamp(midY + (pathDx * 0.35 * perpDir), h * 0.1, h * 0.9);
 
     this.flyDuration = 12 + r() * 5; // 20% slower (12–17s)
+
+    // Seed screen position so hit tests work before first render
+    this.ghostScreenX = this.flyStartX;
+    this.ghostScreenY = this.flyStartY;
+    this.ghostPrevScreenX = this.flyStartX;
+    this.ghostPrevScreenY = this.flyStartY;
+    this.ghostHitRadius = Math.min(this.w, this.h) * 0.35 * 0.5;
+  }
+
+  // Redirect the ghost mid-flight: new bezier path from current position,
+  // with a ≥90° deviation from current heading. Preserves flyElapsed so the
+  // title mask stays faded out until the ghost actually leaves the screen.
+  private changeDirection() {
+    const { w, h } = this;
+    const margin = this.ghostWorldScale * 1.5;
+    const r = Math.random;
+
+    const vx = this.ghostScreenX - this.ghostPrevScreenX;
+    const vy = this.ghostScreenY - this.ghostPrevScreenY;
+    const vLen = Math.sqrt(vx * vx + vy * vy);
+    const curAngle = vLen > 0.01 ? Math.atan2(vy, vx) : r() * Math.PI * 2;
+
+    // Rotate by 90°–270° either direction; shortest deviation lands in [90°, 180°]
+    const rotRad = Math.PI / 2 + r() * Math.PI;
+    const rotSign = r() > 0.5 ? 1 : -1;
+    const newAngle = curAngle + rotSign * rotRad;
+
+    // Travel a full diagonal so the endpoint is comfortably off-screen
+    const travel = Math.sqrt(w * w + h * h) + margin;
+    const sx = this.ghostScreenX;
+    const sy = this.ghostScreenY;
+    const ex = sx + Math.cos(newAngle) * travel;
+    const ey = sy + Math.sin(newAngle) * travel;
+
+    this.flyStartX = sx;
+    this.flyStartY = sy;
+    this.flyEndX = ex;
+    this.flyEndY = ey;
+
+    const midX = (sx + ex) / 2;
+    const midY = (sy + ey) / 2;
+    const pathDx = ex - sx;
+    const pathDy = ey - sy;
+    const perpDir = r() > 0.5 ? 1 : -1;
+    this.flyCtrlX = clamp(midX + (-pathDy * 0.3 * perpDir), -margin, w + margin);
+    this.flyCtrlY = clamp(midY + (pathDx * 0.3 * perpDir), -margin, h + margin);
+
+    const dist = Math.sqrt(pathDx * pathDx + pathDy * pathDy);
+    this.flyDuration = Math.max(5, dist / 130); // ~130 px/s matches intro feel
+
+    this.loopTime = 0;
+    // flyElapsed intentionally not reset — keeps mask at 0
   }
 
   /** Fast character stamp using the atlas. Color is baked via globalAlpha + filter. */
@@ -455,9 +531,16 @@ export class SplashEngine {
 
       // Track time within current loop state
       this.loopTime += dt;
+      if (this.loopState === 'flythrough') this.flyElapsed += dt;
 
+      // Freeze ghost world-space motion once the intro is done so the
+      // background doesn't drift behind the logo. Camera still updates every
+      // frame — its inputs (ghostWorldY, puddleWorldY, progress) are stable
+      // post-intro, but we need it to re-derive on window resize.
+      if (this.loopState === 'intro') {
+        this.updateGhost(dt);
+      }
       this.updateCamera();
-      this.updateGhost(dt);
       this.render();
 
       if (this.progress >= 0.95 && !this.landingFired) {
@@ -607,19 +690,19 @@ export class SplashEngine {
 
       this.renderVignette(ctx);
 
-      // Mask fades out over first 1.5s of flythrough
-      this.maskOpacity = clamp(1.0 - this.loopTime / 1.5, 0, 1);
+      // Mask fades out over first 1.5s of flythrough. Uses flyElapsed (not
+      // loopTime) so a mid-flight direction change doesn't snap the mask back.
+      this.maskOpacity = clamp(1.0 - this.flyElapsed / 1.5, 0, 1);
       if (this.maskOpacity > 0.01) {
         this.renderTitleMask(ctx, this.maskOpacity);
       }
 
     } else if (this.loopState === 'waiting') {
-      // Ghost gone, waiting 3s, then mask fades back in
+      // Ghost gone — 2s beat, then mask fades back in over 1.5s
       if (puddleOp > 0.01) this.renderPuddle(ctx, puddleOp, 0, 1.0);
       this.renderVignette(ctx);
 
-      // Mask fades back in immediately
-      this.maskOpacity = smoothstep(0.0, 1.5, this.loopTime);
+      this.maskOpacity = smoothstep(2.0, 3.5, this.loopTime);
       if (this.maskOpacity > 0.01) {
         this.renderTitleMask(ctx, this.maskOpacity);
       }
@@ -630,21 +713,32 @@ export class SplashEngine {
 
   private updateLoopState() {
     if (this.loopState === 'intro') {
-      // Transition to 'masked' once title is fully visible
-      if (this.progress > 1.5) {
+      // Transition to 'masked' as soon as the title is fully visible so
+      // clicks register immediately. (Fade completes at progress 1.31.)
+      if (this.progress > 1.32) {
         this.loopState = 'masked';
         this.maskOpacity = 1;
         this.loopTime = 0;
       }
     } else if (this.loopState === 'flythrough') {
-      // Ghost finished its path?
-      if (this.loopTime > this.flyDuration) {
+      // Transition when the ghost actually leaves the viewport — not when the
+      // bezier path runs out. Track whether it has appeared first so the
+      // initial off-screen approach doesn't immediately trip the exit check.
+      const margin = this.ghostWorldScale * 0.7;
+      const onScreen =
+        this.ghostScreenX > -margin && this.ghostScreenX < this.w + margin &&
+        this.ghostScreenY > -margin && this.ghostScreenY < this.h + margin;
+      if (onScreen) this.ghostWasVisible = true;
+      const exited = this.ghostWasVisible && !onScreen;
+      // Fallback: if something keeps the ghost on-screen, still time out.
+      if (exited || this.loopTime > this.flyDuration) {
         this.loopState = 'waiting';
         this.loopTime = 0;
+        this.ghostWasVisible = false;
       }
     } else if (this.loopState === 'waiting') {
       // Mask fully back? Return to masked state
-      if (this.loopTime > 4.0) {
+      if (this.loopTime > 4.0) { // 2s beat + 1.5s fade + buffer
         this.loopState = 'masked';
         this.maskOpacity = 1;
         this.loopTime = 0;
@@ -677,6 +771,13 @@ export class SplashEngine {
     const edgeDamp = Math.min(smoothstep(0, 0.15, ft), smoothstep(1, 0.85, ft));
     bx += wanderX * edgeDamp;
     by += wanderY * edgeDamp;
+
+    // Track screen position for hit tests + velocity-based direction
+    this.ghostPrevScreenX = this.ghostScreenX;
+    this.ghostPrevScreenY = this.ghostScreenY;
+    this.ghostScreenX = bx;
+    this.ghostScreenY = by;
+    this.ghostHitRadius = this.ghostWorldScale * 0.5;
 
     // Save all state we'll override
     const saved = {
